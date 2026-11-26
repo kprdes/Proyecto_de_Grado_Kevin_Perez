@@ -1,0 +1,7 @@
+# Versiones con las que se ejecutó la evaluación del proyecto (Python 3.14.5).
+rfdetr==1.8.3
+torch==2.13.0
+torchvision==0.28.0
+supervision==0.29.1
+opencv-python==5.0.0.93
+numpy==2.5.0
