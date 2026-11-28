@@ -26,12 +26,11 @@ class EstadoMano(str, Enum):
 
 @dataclass
 class Visita:
-    """Un ciclo entrada-salida completo de una mano en una zona."""
     actor: str
     zona: str
     t_entrada: float
     t_salida: float | None = None
-    mano: str = ""                       # 'izq' o 'der'
+    mano: str = ""
 
 
 class DetectorVisitas:
@@ -52,7 +51,6 @@ class DetectorVisitas:
 
 
     def _banda_de(self, punto) -> int:
-        """Índice de banda del punto; 0 = fuera del polígono."""
         d = cv2.pointPolygonTest(self.poligono, (float(punto[0]), float(punto[1])), True)
         if d <= 0:
             return 0
