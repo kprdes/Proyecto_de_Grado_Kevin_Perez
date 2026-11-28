@@ -10,7 +10,7 @@ Este codigo implenta la estructura planteada por el autor, usando las distintas 
 
 | Archivo | Capa | Qué hace |
 |---|---|---|
-| `percepcion.py` | Percepción | Corre el estimador de pose multipersona (RF-DETR Keypoint, pesos preentrenados sin ajuste) y devuelve cada persona con su caja y 17 keypoints COCO. Un keypoint con confianza menor a 0,30 se considera no visible. `Rastreador` mantiene un id de pista por IoU. `AsignadorRol` decide si la persona es cajero o cliente según el lado de la línea de rol en que queda su torso. |
+| `percepcion.py` | Percepción | Corre el estimador de pose multipersona y devuelve cada persona con su caja y 17 keypoints COCO. Un keypoint con confianza menor a 0,30 se considera no visible. `Rastreador` mantiene un id de pista por IoU. `AsignadorRol` decide si la persona es cajero o cliente según el lado de la línea de rol en que queda su torso. |
 | `zonas.py` | Zonas | Convierte la posición de cada muñeca en **visitas** a las regiones. Una visita solo cuenta si la mano cruza 3 bandas concéntricas en orden al entrar y en orden inverso al salir. |
 | `pipeline.py` | Traducción | Convierte las visitas en eventos con el rol del actor, los ordena por tiempo y se los entrega al motor. Con `--grabar` dibuja sobre el video la caja, el id, el rol, las muñecas y el rótulo de cada alerta. |
 | `motor.py` | Decisión |Una máquina de estados agrupa los eventos en sesiones y sobre cada sesión se evalúan las reglas. |
