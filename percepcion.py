@@ -4,22 +4,20 @@ Este archivo corresponde a la capa de percepción.
 Toma un fotograma y retorna una lista de personas con pose, identidad y rol.
 """
 
-from abc import ABC, abstractmethod
 from dataclasses import dataclass
-
 import numpy as np
-
+from ultralytics import YOLO
 # ---------------------------------------------------------------------------
 # Esqueleto COCO, 17 puntos
 # ---------------------------------------------------------------------------
 
-COCO_KEYPOINTS = [
+KEYPOINTS = [
     "nariz", "ojo_izq", "ojo_der", "oreja_izq", "oreja_der",
     "hombro_izq", "hombro_der", "codo_izq", "codo_der",
     "muneca_izq", "muneca_der", "cadera_izq", "cadera_der",
     "rodilla_izq", "rodilla_der", "tobillo_izq", "tobillo_der",
 ]
-KP = {n: i for i, n in enumerate(COCO_KEYPOINTS)}
+KP = {n: i for i, n in enumerate(KEYPOINTS)}
 
 CONF_KP_MIN = 0.30     
 
@@ -50,79 +48,21 @@ class Persona:
 # Estimador de pose
 # ---------------------------------------------------------------------------
 
-class Detector(ABC):
-    @abstractmethod
-    def detectar(self, frame_bgr: np.ndarray) -> list[Persona]:
-        """Recibe un fotograma BGR de OpenCV y devuelve las personas encontradas."""
+class EstimadorPose:
 
-
-class DetectorRFDETR(Detector):
-
-    def __init__(self, umbral: float = 0.4):
-        from rfdetr import RFDETRKeypointPreview
-
+    def __init__(self, pesos: str = "yolo26n-pose.pt", umbral: float = 0.4):
         self.umbral = umbral
-        device = None
-        try:
-            import torch
-            if torch.cuda.is_available():
-                device = "cuda"
-            elif torch.backends.mps.is_available():
-                device = "mps"
-        except Exception:                    
-            pass
-        try:
-            self.modelo = RFDETRKeypointPreview(device=device) if device else RFDETRKeypointPreview()
-        except TypeError:                          # versiones sin argumento device
-            self.modelo = RFDETRKeypointPreview()
+        self.modelo = YOLO(pesos)
 
     def detectar(self, frame_bgr: np.ndarray) -> list[Persona]:
-        rgb = frame_bgr[:, :, ::-1].copy()
-        r = self.modelo.predict(rgb, threshold=self.umbral)
-
-        if isinstance(r, (tuple, list)):
-            obj_kp = next((x for x in r if hasattr(x, "xy")), None)
-            obj_det = next((x for x in r if hasattr(x, "xyxy")), None)
-        else:
-            obj_kp = r if hasattr(r, "xy") else None
-            obj_det = r if hasattr(r, "xyxy") else None
-        if obj_kp is None:
+        r = self.modelo.predict(frame_bgr, conf=self.umbral, verbose=False)[0]
+        if r.keypoints is None or len(r.boxes) == 0:
             return []
-
-        xy = np.asarray(obj_kp.xy, dtype=float)            # (N, K, 2)
-        if xy.size == 0:
-            return []
-
-        kconf = getattr(obj_kp, "keypoint_confidence", None)
-        if kconf is None:
-            kconf = getattr(obj_kp, "confidence", None)
-        kconf = (np.asarray(kconf, dtype=float) if kconf is not None
-                 else np.ones(xy.shape[:2]))
-        if kconf.ndim == 1:                                # (N,) -> (N, K)
-            kconf = np.repeat(kconf[:, None], xy.shape[1], axis=1)
-
-        cajas = np.asarray(obj_det.xyxy, dtype=float) if obj_det is not None else None
-
-        personas = []
-        for i in range(len(xy)):
-            k = np.concatenate([xy[i], kconf[i][:, None]], axis=1)   # (K, 3)
-
-            if cajas is not None and i < len(cajas):
-                caja = cajas[i]
-            else:
-                vis = k[k[:, 2] >= CONF_KP_MIN][:, :2]
-                if len(vis) < 2:
-                    continue
-                x1, y1 = vis.min(axis=0)
-                x2, y2 = vis.max(axis=0)
-                mx, my = (x2 - x1) * 0.15, (y2 - y1) * 0.15
-                caja = np.array([x1 - mx, y1 - my, x2 + mx, y2 + my])
-
-            visibles = k[k[:, 2] >= CONF_KP_MIN]
-            conf = float(visibles[:, 2].mean()) if len(visibles) else 0.0
-            personas.append(Persona(caja=caja, confianza=conf, keypoints=k))
-
-        return personas
+        cajas = r.boxes.xyxy.cpu().numpy().astype(float)
+        confs = r.boxes.conf.cpu().numpy().astype(float)
+        kps = r.keypoints.data.cpu().numpy().astype(float)  
+        return [Persona(caja=cajas[i], confianza=float(confs[i]), keypoints=kps[i])
+                for i in range(len(cajas))]
 
 
 # ---------------------------------------------------------------------------
@@ -164,15 +104,19 @@ class Rastreador:
     def actualizar(self, personas: list[Persona]) -> list[Persona]:
         self.nuevas_confirmadas = set()
         self.perdidas = set()
+        det_usadas = set()
+        pistas_usadas = set()
 
-        # Emparejamiento voraz por IoU, de mayor a menor.
-        pares = sorted(
-            ((_iou(p.caja, pista.caja), i, j)
-             for i, p in enumerate(personas)
-             for j, pista in enumerate(self.pistas)),
-            key=lambda x: -x[0],
-        )
-        det_usadas, pistas_usadas = set(), set()
+        
+        pares = []
+
+        for i, persona in enumerate(personas):
+            for j, pista in enumerate(self.pistas):
+                iou = _iou(persona.caja, pista.caja)
+                pares.append((iou, i, j))
+        pares.sort(key=lambda par: par[0], reverse=True)
+
+        
         for s, i, j in pares:
             if s < self.iou_min or i in det_usadas or j in pistas_usadas:
                 continue
@@ -213,15 +157,10 @@ class Rastreador:
         return {p.id for p in self.pistas if p.confirmada and p.perdidos == 0}
 
     def vaciar(self) -> set:
-        """Al terminar el video, todas las pistas confirmadas se dan por idas."""
         idas = {p.id for p in self.pistas if p.confirmada}
         self.pistas = []
         return idas
 
-
-# ---------------------------------------------------------------------------
-# Rol por geometría y muñecas
-# ---------------------------------------------------------------------------
 
 class AsignadorRol:
 
